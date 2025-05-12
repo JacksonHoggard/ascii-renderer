@@ -1,4 +1,5 @@
 import { calculateAscii } from "./AsciiCalculator";
+import AsciiWorker from "./AsciiWorker.js?worker";
 
 export class AsciiEffect {
     
@@ -7,7 +8,7 @@ export class AsciiEffect {
     constructor(renderer, charSet, options) {
 
         if(window.Worker && !AsciiEffect.worker) {
-            AsciiEffect.worker = new Worker('/src/AsciiWorker.js', { type: "module" });
+            AsciiEffect.worker = new AsciiWorker();
         }
 
         charSet = (charSet === undefined) ? ' .:-=+*#%@' : charSet;

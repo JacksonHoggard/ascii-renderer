@@ -7,10 +7,12 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import GUI from 'lil-gui';
 import { createNoise2D } from 'simplex-noise';
 import { AsciiEffectGPU } from './AsciiEffectGPU.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 let noise2D = createNoise2D();
 
 const defaultSettings = {
+    renderMode: 'GPU',
     ramp: ' .:-=+*#%@',
     invert: true,
     resolution: 0.15,
@@ -79,6 +81,68 @@ controls.enableDamping = true;
 /* ---- GUI ---- */
 const gui = new GUI({ title: 'Settings' });
 
+gui.add({
+    importModel: function () {
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.obj,.stl,.gltf,.glb,model/*';
+        fileInput.style.display = 'none';
+        document.body.appendChild(fileInput);
+        fileInput.addEventListener('change', async e => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const url = URL.createObjectURL(file);
+            try {
+                let obj;
+                if (file.name.match(/\.(obj)$/i))
+                    obj = await new OBJLoader().loadAsync(url);
+                else if (file.name.match(/\.(stl)$/i))
+                    obj = await new STLLoader().loadAsync(url);
+                else if (file.name.match(/\.(gltf|glb)$/i))
+                    obj = (await new GLTFLoader().loadAsync(url)).scene;
+                else {
+                    alert('Unsupported format');
+                    return;
+                }
+                scene.remove(mesh);
+                obj.traverse(c => {
+                    if (c.isMesh) {
+                        c.material = mesh.material.clone();
+                        c.material.flatShading = settings.flat;
+                        c.material.needsUpdate = true;
+                    }
+                });
+                mesh = obj;
+                const geometries = [];
+                mesh.traverse(child => {
+                    if (child.isMesh && child.geometry) {
+                        child.updateMatrix();
+                        const clonedGeom = child.geometry.clone();
+                        clonedGeom.applyMatrix4(child.matrix);
+                        geometries.push(clonedGeom);
+                    }
+                });
+                if (geometries.length > 0) {
+                    const mergedGeometry = mergeGeometries(geometries, false);
+                    const material = new THREE.MeshStandardMaterial({
+                        color: settings.meshColor,
+                        flatShading: settings.flat
+                    });
+                    material.needsUpdate = true;
+                    mesh = new THREE.Mesh(mergedGeometry, material);
+                }
+                scene.add(mesh);
+            } catch (err) {
+                console.error(err);
+                alert('Failed to load model');
+            }
+            document.body.removeChild(fileInput);
+        });
+        fileInput.click();
+    }
+}, 'importModel').name('Import Model');
+
 /* group: ascii */
 gui.add(settings, 'renderMode', ['GPU', 'CPU']).name('Render Mode').onChange(rebuildPipeline);
 gui.add(settings, 'ramp').name('Char Ramp').onFinishChange(() => {
@@ -98,8 +162,8 @@ fLight.add(settings, 'ambIntensity', 0, 2, 0.05).name('Ambient Intensity').onCha
 
 /* group: material */
 const fMat = gui.addFolder('Material');
-fMat.addColor(settings, 'meshColor').name('Mesh Color').onChange(() => mesh.material.color.set(settings.meshColor));
-fMat.add(settings, 'flat').name('Flat Shading').onChange(() => { updateMaterial(); });
+fMat.addColor(settings, 'meshColor').name('Mesh Color').onChange(() => updateMaterial());
+fMat.add(settings, 'flat').name('Flat Shading').onChange(() => updateMaterial());
 
 /* group: terrain */
 const fTerrain = gui.addFolder('Terrain');
@@ -170,36 +234,6 @@ const exportActions = {
 fExport.add(exportActions, 'copy').name('Copy to Clipboard');
 fExport.add(exportActions, 'saveTxt').name('Save as TXT');
 fExport.add(exportActions, 'saveJpg').name('Save as JPG');
-
-/* ---- model loader ---- */
-const fileInput = document.getElementById('file');
-fileInput.addEventListener('change', async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const url = URL.createObjectURL(file);
-    try {
-        let obj;
-        if (file.name.match(/\.(obj)$/i)) obj = await new OBJLoader().loadAsync(url);
-        else if (file.name.match(/\.(stl)$/i)) obj = await new STLLoader().loadAsync(url);
-        else if (file.name.match(/\.(gltf|glb)$/i)) {
-            obj = (await new GLTFLoader().loadAsync(url)).scene;
-        } else {
-            alert('Unsupported format');
-            return;
-        }
-        scene.remove(mesh);
-        obj.traverse(c => {
-            if (c.isMesh) {
-                c.material = mesh.material.clone();
-                c.material.flatShading = settings.flat;
-                c.material.needsUpdate = true;
-            }
-        });
-        mesh = obj;
-        scene.add(mesh);
-    } catch (err) { console.error(err); alert('Failed to load model'); }
-});
 
 /* ---- helpers ---- */
 function buildAsciiEffect() {
@@ -331,7 +365,10 @@ function terrainCameraSetup() {
 }
 
 function updateMaterial() {
-    mesh.material.flatShading = settings.flat;
+    mesh.material = new THREE.MeshStandardMaterial({
+        color: settings.meshColor,
+        flatShading: settings.flat
+    });
     mesh.material.needsUpdate = true;
 }
 
@@ -343,13 +380,13 @@ addEventListener('resize', () => {
 });
 
 function rebuildPipeline() {
-    switch(settings.renderMode) {
+    switch (settings.renderMode) {
         case 'GPU':
-            if(document.body.contains(effect.domElement))
+            if (document.body.contains(effect.domElement))
                 document.body.removeChild(effect.domElement);
             break;
         case 'CPU':
-            if(document.body.contains(effectGPU.domElement))
+            if (document.body.contains(effectGPU.domElement))
                 document.body.removeChild(effectGPU.domElement);
             break;
     }
@@ -361,7 +398,7 @@ function animate() {
     if (settings.spin)
         mesh.rotation.y += settings.spinSpeed;
     controls.update();
-    switch(settings.renderMode) {
+    switch (settings.renderMode) {
         case 'GPU':
             effectGPU.render(scene, camera);
             break;
